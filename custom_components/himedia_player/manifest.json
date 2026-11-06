@@ -1,0 +1,16 @@
+{
+  "domain": "himedia_player",
+  "name": "HiMedia Player",
+  "codeowners": [
+    "@liujun1223"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/liujun1223/himedia_player",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/liujun1223/himedia_player/issues",
+  "requirements": [
+    "pyserial>=3.5"
+  ],
+  "version": "1.0.0"
+}

@@ -2,30 +2,17 @@
   "config": {
     "step": {
       "user": {
-        "title": "选择配置方式",
+        "title": "配置海美迪播放器",
+        "description": "串口与 IP 至少填一个；两者同时填写时优先走 IP，失败自动降级到串口。",
         "data": {
-          "auto_detect": "自动识别串口"
-        }
-      },
-      "host": {
-        "title": "填写设备IP(可选)",
-        "description": "已识别到播放器 **{name}**。填写 IP 地址可启用 8899 端口的状态查询与点播；留空则仅使用 RS-232 串口。",
-        "data": {
-          "host": "IP地址"
-        }
-      },
-      "manual": {
-        "title": "手动配置",
-        "description": "串口与 IP 至少填写一个；两者都填写时优先走 IP，失败自动降级到串口。",
-        "data": {
-          "port": "串口",
+          "port": "串口（不选则仅用 IP）",
           "baudrate": "波特率",
-          "host": "IP地址(可选)"
+          "host": "IP 地址（可选）"
         }
       }
     },
     "error": {
-      "cannot_connect_http": "无法连接到设备的 8899 HTTP 服务，请检查 IP 地址和网络",
+      "cannot_connect_http": "无法连接 8899 HTTP 服务，请检查 IP",
       "cannot_connect_serial": "串口无响应，请检查线序与波特率",
       "no_connection": "请至少填写串口或 IP 地址",
       "unknown": "[%key:common::config_flow::error::unknown%]"

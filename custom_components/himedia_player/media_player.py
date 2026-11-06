@@ -124,7 +124,18 @@ class HiMediaMediaPlayer(MediaPlayerEntity):
     async def _send(self, name: str) -> bool:
         """下发命令，失败时抛出可读错误."""
         if not await self._device.async_send_command(name):
-            raise HomeAssistantError(f"发送命令 {name} 失败")
+            if self._device.host and not self._device.port:
+                raise HomeAssistantError(
+                    f"发送命令 {name} 失败：当前仅配置了 IP，"
+                    "且设备 8899 端口不可达；请确认 IP 或补充串口"
+                )
+            if self._device.port and not self._device.host:
+                raise HomeAssistantError(
+                    f"发送命令 {name} 失败：串口 {self._device.port} 无响应"
+                )
+            raise HomeAssistantError(
+                f"发送命令 {name} 失败：HTTP 与串口均未响应"
+            )
         return True
 
     async def async_turn_on(self) -> None:

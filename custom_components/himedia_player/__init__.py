@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 import aiohttp
@@ -20,12 +21,14 @@ from .const import (
     CONF_HOST,
     CONF_PORT,
     DEFAULT_BAUDRATE,
+    DEFAULT_HTTP_PORT,
     DOMAIN,
     HTTP_AUDIO_PLAYER_INFO,
     HTTP_BROADCAST_MUSIC,
     HTTP_DEVICE_INFO,
     HTTP_PLAY_POSTER,
     HTTP_PLAYER_INFO,
+    HTTP_RETRY_INTERVAL,
     HTTP_SEND_KEY,
     HTTP_TIMEOUT,
     KEY_MAP,
@@ -59,6 +62,8 @@ class HiMediaPlayer:
         self._serial_connection: serial.Serial | None = None
         self._available_ip = False
         self._available_serial = False
+        # HTTP 故障退避：monotonic 时间戳，早于该时间的请求直接跳过
+        self._ip_down_until = 0.0
 
         self.mac_address: str | None = None
         self.model: str | None = None
@@ -171,8 +176,14 @@ class HiMediaPlayer:
     async def async_http(
         self, path: str, method: str = "GET", payload: Any | None = None
     ) -> Any | None:
-        """请求设备 HTTP 接口；成功返回解析后的 JSON 或纯文本."""
+        """请求设备 HTTP 接口；成功返回解析后的 JSON 或纯文本.
+
+        失败后进入 60 秒退避：期间所有请求直接跳过（立即返回 None），
+        避免每次轮询/按键都干等超时，拖慢整个实体更新.
+        """
         if self._host is None:
+            return None
+        if time.monotonic() < self._ip_down_until:
             return None
         try:
             async with asyncio.timeout(HTTP_TIMEOUT):
@@ -184,20 +195,34 @@ class HiMediaPlayer:
                     status = response.status
                     body = await response.text()
         except (TimeoutError, aiohttp.ClientError) as err:
-            self._available_ip = False
-            _LOGGER.debug("HTTP %s 失败: %s", path, err)
+            self._mark_ip_down()
+            _LOGGER.debug("HTTP %s 失败: %r", path, err)
             return None
 
         if status != 200:
-            self._available_ip = False
+            self._mark_ip_down()
             _LOGGER.debug("HTTP %s 返回状态码 %s", path, status)
             return None
 
         self._available_ip = True
+        self._ip_down_until = 0.0
         text = body.strip()
         if not text:
             return ""
         return _parse_json_object(text) or text
+
+    def _mark_ip_down(self) -> None:
+        """标记 IP 通道进入退避期."""
+        was_available = self._available_ip
+        self._available_ip = False
+        self._ip_down_until = time.monotonic() + HTTP_RETRY_INTERVAL
+        if was_available:
+            _LOGGER.warning(
+                "HiChannelTV HTTP 不可达（%s:%s），%s 秒内改走串口，之后自动重试 IP",
+                self._host,
+                DEFAULT_HTTP_PORT,
+                HTTP_RETRY_INTERVAL,
+            )
 
     async def async_get_device_info(self) -> dict[str, Any] | None:
         """读取设备信息（型号、版本、MAC 等）."""

@@ -116,9 +116,8 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_BAUDRATE,
                         default=previous.get(CONF_BAUDRATE, DEFAULT_BAUDRATE),
                     ): vol.In([9600, 19200, 38400, 57600, 115200]),
-                    vol.Optional(
-                        CONF_HOST, default=previous.get(CONF_HOST, "")
-                    ): str,
+                    # IP 不保留 previous 值，避免用户清空后被自动回填
+                    vol.Optional(CONF_HOST, default=""): str,
                 }
             ),
             errors=errors,
@@ -154,28 +153,31 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return data if isinstance(data, dict) else {}
 
     async def _async_test_http(self, host: str) -> dict[str, Any] | None:
-        """请求 /get 验证 HiChannelTV 服务."""
+        """请求 /get 验证 HiChannelTV 服务.
+
+        只要能建立连接就算通过（status 200/404/500 都算"活着"），
+        不强求 JSON 格式——部分固件可能返回非预期响应，
+        但浏览器能控制的设备在 HA 里通常也能连上。
+        """
         try:
             async with asyncio.timeout(HTTP_TIMEOUT):
                 async with async_get_clientsession(self.hass).get(
-                    f"http://{host}{HTTP_DEVICE_INFO}"
+                    f"http://{host}{HTTP_DEVICE_INFO}",
+                    allow_redirects=True,
                 ) as response:
-                    if response.status != 200:
+                    # 能连上就说明 8899 端口活着
+                    _LOGGER.debug(
+                        "HTTP 探测 %s -> status %s", host, response.status
+                    )
+                    if response.status >= 500:
                         return None
+                    # 尽力解析 JSON 作为设备信息，解析不出也无所谓
                     body = await response.text()
-        except (TimeoutError, aiohttp.ClientError):
-            _LOGGER.debug("HTTP 探测 %s 失败", host, exc_info=True)
+                    data = _extract_json(body)
+                    return data if isinstance(data, dict) else {}
+        except (TimeoutError, aiohttp.ClientError) as err:
+            _LOGGER.debug("HTTP 探测 %s 失败: %s", host, err)
             return None
-
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(data, dict) or not data:
-            return None
-        if not data.get("mac") and not data.get("DeivcesName"):
-            return None
-        return data
 
 
 def _normalize_host(value: str) -> str:
@@ -185,3 +187,21 @@ def _normalize_host(value: str) -> str:
         if host.lower().startswith(prefix):
             host = host[len(prefix) :]
     return host.split("/", 1)[0]
+
+
+def _extract_json(text: str) -> Any:
+    """从返回文本中尽力提取 JSON 对象；失败返回 None."""
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    return None

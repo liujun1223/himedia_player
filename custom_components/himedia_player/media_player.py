@@ -85,6 +85,8 @@ class HiMediaMediaPlayer(MediaPlayerEntity):
     async def async_update(self) -> None:
         """轮询播放状态；IP 未配置时依赖命令后的状态推断."""
         if self._device.host is None:
+            # 串口模式没有状态查询接口，只做连接探活
+            await self.hass.async_add_executor_job(self._device.connect)
             return
 
         data = await self._device.async_poll_state()

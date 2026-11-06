@@ -185,18 +185,33 @@ class HiMediaPlayer:
             return None
         if time.monotonic() < self._ip_down_until:
             return None
+        # 模仿 curl 的请求行为，规避嵌入式 HTTP 服务器兼容性问题：
+        # - Connection: close   每请求一条新连接，用完即断，
+        #   防止设备单连接服务器被 keep-alive 池占死
+        # - Accept-Encoding: identity   不协商 gzip，
+        #   部分固件对 gzip 响应实现有缺陷
+        curl_like_headers = {
+            "Connection": "close",
+            "Accept-Encoding": "identity",
+        }
         try:
             async with asyncio.timeout(HTTP_TIMEOUT):
                 if method == "POST":
-                    request = self._session.post(self._url(path), json=payload)
+                    request = self._session.post(
+                        self._url(path), json=payload, headers=curl_like_headers
+                    )
                 else:
-                    request = self._session.get(self._url(path))
+                    request = self._session.get(
+                        self._url(path), headers=curl_like_headers
+                    )
                 async with request as response:
                     status = response.status
                     body = await response.text()
         except (TimeoutError, aiohttp.ClientError) as err:
-            self._mark_ip_down()
-            _LOGGER.debug("HTTP %s 失败: %r", path, err)
+            self._mark_ip_down(err)
+            _LOGGER.debug(
+                "HTTP %s 失败: %s: %s", path, type(err).__name__, err
+            )
             return None
 
         if status != 200:
@@ -211,16 +226,19 @@ class HiMediaPlayer:
             return ""
         return _parse_json_object(text) or text
 
-    def _mark_ip_down(self) -> None:
-        """标记 IP 通道进入退避期."""
+    def _mark_ip_down(self, err: Exception | None = None) -> None:
+        """标记 IP 通道进入退避期；首次失败时在普通日志级别给出原因."""
         was_available = self._available_ip
         self._available_ip = False
         self._ip_down_until = time.monotonic() + HTTP_RETRY_INTERVAL
         if was_available:
+            detail = f"{type(err).__name__}: {err}" if err else "status 非 200"
             _LOGGER.warning(
-                "HiChannelTV HTTP 不可达（%s:%s），%s 秒内改走串口，之后自动重试 IP",
+                "HiChannelTV HTTP 不可达（%s:%s）[%s]，"
+                "%s 秒内改走串口，之后自动重试 IP",
                 self._host,
                 DEFAULT_HTTP_PORT,
+                detail,
                 HTTP_RETRY_INTERVAL,
             )
 

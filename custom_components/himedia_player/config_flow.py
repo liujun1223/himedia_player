@@ -81,8 +81,10 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_host(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """串口识别成功后，可选填写 IP 启用 HTTP 控制."""
-        errors: dict[str, str] = {}
+        """串口识别成功后，可选填写 IP 启用 HTTP 控制.
+
+        HTTP 8899 不通时仍允许保存（IP 失败会在运行时自动降级到串口）.
+        """
         assert self._detected_port is not None
 
         if user_input is not None:
@@ -90,28 +92,31 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             info = self._detected_info
             if host:
                 http_info = await self._async_test_http(host)
-                if http_info is None:
-                    errors["base"] = "cannot_connect_http"
-                else:
+                if http_info is not None:
                     info = http_info
-            if not errors:
-                await self.async_set_unique_id(
-                    self._unique_id(info, self._detected_port, host)
-                )
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=self._build_title(info),
-                    data={
-                        CONF_PORT: self._detected_port,
-                        CONF_BAUDRATE: DEFAULT_BAUDRATE,
-                        CONF_HOST: host,
-                    },
-                )
+                else:
+                    _LOGGER.warning(
+                        "IP %s 的 HiChannelTV 8899 端口不可达，"
+                        "运行时将仅使用串口控制",
+                        host,
+                    )
+
+            await self.async_set_unique_id(
+                self._unique_id(info, self._detected_port, host)
+            )
+            self._abort_if_unique_id_configured()
+            return self.async_create_entry(
+                title=self._build_title(info),
+                data={
+                    CONF_PORT: self._detected_port,
+                    CONF_BAUDRATE: DEFAULT_BAUDRATE,
+                    CONF_HOST: host,
+                },
+            )
 
         return self.async_show_form(
             step_id="host",
             data_schema=vol.Schema({vol.Optional(CONF_HOST, default=""): str}),
-            errors=errors,
             description_placeholders={
                 "name": self._build_title(self._detected_info)
             },
@@ -120,8 +125,12 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """手动选择串口/IP，二者至少配置一个."""
+        """手动选择串口/IP，二者至少配置一个.
+
+        串口必须能成功打开；IP 可选，8899 不通时如串口可用则允许继续.
+        """
         errors: dict[str, str] = {}
+        warnings: dict[str, str] = {}
         ports = await self.hass.async_add_executor_job(
             serial.tools.list_ports.comports
         )
@@ -139,18 +148,39 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "no_connection"
             else:
                 info: dict[str, Any] = {}
+                serial_ok = False
+
                 if port:
                     serial_info = await self.hass.async_add_executor_job(
                         self._sync_probe_port, port, baudrate
                     )
                     if serial_info is None:
-                        errors["base"] = "cannot_connect_serial"
+                        # 部分固件不支持 #getDeviceInfo#，退而校验串口能否打开
+                        try:
+                            with serial.Serial(port, baudrate, timeout=0.5):
+                                pass
+                            serial_ok = True
+                            info = {}
+                        except (serial.SerialException, OSError, ValueError):
+                            errors["base"] = "cannot_connect_serial"
                     else:
+                        serial_ok = True
                         info = serial_info
+
                 if host and not errors:
                     http_info = await self._async_test_http(host)
                     if http_info is None:
-                        errors["base"] = "cannot_connect_http"
+                        if serial_ok:
+                            # IP 不通但串口可用 → 允许保存，打 warning
+                            _LOGGER.warning(
+                                "IP %s 的 HiChannelTV 8899 不可达，"
+                                "运行时将仅使用串口",
+                                host,
+                            )
+                            warnings["host"] = "http_unreachable_fallback_serial"
+                        else:
+                            # 只有 IP 且不通 → 拒绝
+                            errors["base"] = "cannot_connect_http"
                     else:
                         info = http_info
 
@@ -186,6 +216,9 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+            description_placeholders={
+                "warnings": warnings.get("host", ""),
+            },
         )
 
     # ------------------------------------------------------------------

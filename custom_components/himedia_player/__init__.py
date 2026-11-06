@@ -279,7 +279,13 @@ class HiMediaPlayer:
             info = await self.async_get_device_info()
             if info is not None:
                 self._apply_device_info(info)
+                _LOGGER.info(
+                    "HiChannelTV HTTP 控制已就绪（%s）", self._host
+                )
                 return True
+            _LOGGER.warning(
+                "HiChannelTV 8899 端口不可达（%s），尝试串口降级", self._host
+            )
 
         if self._port is not None:
             info = await self._hass.async_add_executor_job(
@@ -288,9 +294,14 @@ class HiMediaPlayer:
             if info is not None:
                 self._available_serial = True
                 self._apply_device_info(info)
+                _LOGGER.info("RS-232 控制已就绪（%s）", self._port)
                 return True
             # 部分固件不支持 #getDeviceInfo#，串口能打开即视为可用
             if await self._hass.async_add_executor_job(self.connect):
+                _LOGGER.info(
+                    "RS-232 已连接（%s），设备信息读取不可用但控制命令可下发",
+                    self._port,
+                )
                 return True
 
         return False

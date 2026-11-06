@@ -3,6 +3,7 @@
 import json
 import logging
 import time
+from typing import Any
 
 import serial
 import serial.tools.list_ports
@@ -11,13 +12,19 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
 
-from .const import CONF_BAUDRATE, CONF_HOST, CONF_PORT, DEFAULT_BAUDRATE, DOMAIN
+from .const import (
+    CONF_BAUDRATE,
+    CONF_HOST,
+    CONF_PORT,
+    DEFAULT_BAUDRATE,
+    DOMAIN,
+    SUPPORTED_USB_VIDS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 NO_SERIAL = ""
 NO_SERIAL_LABEL = "不使用串口（仅 IP 控制）"
-
 BAUDRATE_OPTIONS = [9600, 19200, 38400, 57600, 115200]
 
 
@@ -27,18 +34,97 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self) -> None:
-        """初始化配置流程，缓存串口探测到的设备信息."""
+        """初始化配置流程，记录串口探测结果."""
         super().__init__()
-        self._last_serial_info: dict = {}
+        self._detected_port: str | None = None
+        self._detected_info: dict[str, Any] = {}
 
     async def async_step_user(
-        self, user_input: dict | None = None
+        self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """手动配置：串口、波特率、IP 至少填一个.
+        """第一步：选择自动识别串口还是手动配置."""
+        if user_input is not None:
+            if user_input.get("auto_detect"):
+                return await self.async_step_auto_detect()
+            return await self.async_step_manual()
 
-        IP 不做预验证——浏览器能通就说明设备侧没问题，
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {vol.Required("auto_detect", default=True): bool}
+            ),
+        )
+
+    async def async_step_auto_detect(
+        self, user_input: Any = None
+    ) -> ConfigFlowResult:
+        """扫描串口并发送 #getDeviceInfo# 验证海美迪播放器."""
+        ports = await self.hass.async_add_executor_job(
+            serial.tools.list_ports.comports
+        )
+        candidates = [
+            port.device for port in ports if self._is_likely_serial_device(port)
+        ]
+        _LOGGER.debug("待检测串口: %s", candidates)
+
+        for port in candidates:
+            info = await self.hass.async_add_executor_job(
+                self._sync_probe_port, port
+            )
+            if info is None:
+                continue
+            _LOGGER.info("在 %s 上发现海美迪播放器", port)
+            self._detected_port = port
+            self._detected_info = info
+            return await self.async_step_host()
+
+        # 没找到串口设备时退回手动配置，仍可只填 IP
+        return await self.async_step_manual()
+
+    async def async_step_host(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """串口识别成功后，可选填写 IP 启用状态轮询与点播.
+
+        IP 不做 HTTP 预验证——浏览器能通就说明设备没问题，
         HA 侧的网络差异不该在这里堵用户.
         """
+        assert self._detected_port is not None
+
+        if user_input is not None:
+            host = _normalize_host(user_input.get(CONF_HOST, ""))
+            info = self._detected_info
+            if not host:
+                info = {
+                    k: v for k, v in info.items() if k in ("mac", "DeivcesName", "pid")
+                }
+            await self.async_set_unique_id(
+                info.get("mac") or self._detected_port or host
+            )
+            self._abort_if_unique_id_configured()
+            return self.async_create_entry(
+                title=self._build_title(info),
+                data={
+                    CONF_PORT: self._detected_port,
+                    CONF_BAUDRATE: DEFAULT_BAUDRATE,
+                    CONF_HOST: host,
+                },
+            )
+
+        return self.async_show_form(
+            step_id="host",
+            data_schema=vol.Schema(
+                {vol.Optional(CONF_HOST, default=""): str}
+            ),
+            description_placeholders={
+                "name": self._build_title(self._detected_info)
+            },
+        )
+
+    async def async_step_manual(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """手动配置：串口、波特率、IP 至少填一个."""
         errors: dict[str, str] = {}
         ports = await self.hass.async_add_executor_job(
             serial.tools.list_ports.comports
@@ -55,12 +141,12 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             if not port and not host:
                 errors["base"] = "no_connection"
-            # 串口必须能打开；IP 不预验证
             elif port:
                 serial_ok = await self.hass.async_add_executor_job(
                     self._sync_probe_port, port, baudrate
                 )
                 if serial_ok is None:
+                    # 部分固件不支持 #getDeviceInfo#，退而校验串口能否打开
                     try:
                         await self.hass.async_add_executor_job(
                             _try_open_serial, port, baudrate
@@ -69,21 +155,13 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         errors["base"] = "cannot_connect_serial"
 
             if not errors:
-                info = self._last_serial_info if port else {}
-                if port:
-                    unique_id = info.get("mac") or port or host
-                    title = (
-                        info.get("DeivcesName")
-                        or info.get("pid")
-                        or "HiMedia"
-                    )
-                else:
-                    unique_id = host
-                    title = "HiMedia"
-                await self.async_set_unique_id(unique_id)
+                info = self._detected_info if port else {}
+                await self.async_set_unique_id(
+                    info.get("mac") or port or host
+                )
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
-                    title=title,
+                    title=self._build_title(info),
                     data={
                         CONF_PORT: port,
                         CONF_BAUDRATE: baudrate,
@@ -92,28 +170,48 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
 
         previous = user_input or {}
-        schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_PORT, default=previous.get(CONF_PORT, NO_SERIAL)
-                ): vol.In(port_options),
-                vol.Required(
-                    CONF_BAUDRATE,
-                    default=previous.get(CONF_BAUDRATE, DEFAULT_BAUDRATE),
-                ): vol.In(BAUDRATE_OPTIONS),
-                # IP 不回填 previous，避免清空后被自动回填
-                vol.Optional(CONF_HOST, default=""): str,
-            }
-        )
+        # 全部用 Optional：避免前端把空值当必填拦截；
+        # IP 不回填 previous，避免用户清空后被自动回填
         return self.async_show_form(
-            step_id="user",
-            data_schema=schema,
+            step_id="manual",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_PORT, default=previous.get(CONF_PORT, NO_SERIAL)
+                    ): vol.In(port_options),
+                    vol.Optional(
+                        CONF_BAUDRATE,
+                        default=previous.get(CONF_BAUDRATE, DEFAULT_BAUDRATE),
+                    ): vol.In(BAUDRATE_OPTIONS),
+                    vol.Optional(CONF_HOST, default=""): str,
+                }
+            ),
             errors=errors,
+        )
+
+    # ------------------------------------------------------------------
+    # 辅助方法
+    # ------------------------------------------------------------------
+    def _build_title(self, info: dict[str, Any]) -> str:
+        """根据设备信息构造 HA 中显示的标题."""
+        return info.get("DeivcesName") or info.get("pid") or "HiMedia"
+
+    def _is_likely_serial_device(self, port: Any) -> bool:
+        """排除蓝牙、调制解调器等无关串口."""
+        exclude_keywords = ["Bluetooth", "Modem", "Fax", "Keyboard", "Mouse"]
+        if any(keyword in port.description for keyword in exclude_keywords):
+            return False
+        if port.vid in SUPPORTED_USB_VIDS:
+            return True
+        if "USB" in port.description or "UART" in port.description:
+            return True
+        return port.device.startswith("/dev/ttyUSB") or port.device.startswith(
+            "/dev/ttyS"
         )
 
     def _sync_probe_port(
         self, port: str, baudrate: int = DEFAULT_BAUDRATE
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """发送 #getDeviceInfo# 验证串口上是否为海美迪播放器."""
         try:
             with serial.Serial(port, baudrate, timeout=1) as ser:
@@ -136,7 +234,7 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except (json.JSONDecodeError, ValueError):
             return {}
         if isinstance(data, dict):
-            self._last_serial_info = data
+            self._detected_info = data
             return data
         return None
 

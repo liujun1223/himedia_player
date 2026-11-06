@@ -16,6 +16,10 @@ DEFAULT_HTTP_PORT = 8899
 HTTP_TIMEOUT = 5
 SERIAL_TIMEOUT = 1
 
+# 支持 USB 转串口的芯片 VID
+# FTDI: 0x0403, Silicon Labs: 0x10C4, Prolific: 0x067B, CH340: 0x1A86
+SUPPORTED_USB_VIDS = [0x0403, 0x10C4, 0x067B, 0x1A86]
+
 # ---------------------------------------------------------------------------
 # HiChannelTV HTTP 接口（端口 8899）
 # ---------------------------------------------------------------------------

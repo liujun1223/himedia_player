@@ -1,4 +1,4 @@
-﻿"""Config flow for the HiMedia Player integration."""
+"""Config flow for the HiMedia Player integration."""
 
 import json
 import logging

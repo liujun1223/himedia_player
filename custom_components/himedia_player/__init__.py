@@ -67,6 +67,8 @@ class HiMediaPlayer:
         self._last_ip_error: str | None = None
         # 当前故障周期是否已在警告级别提示过
         self._ip_warned = False
+        # 连续失败的周期数：首个周期告警，后续降为 INFO 降低噪音
+        self._ip_failure_cycles = 0
         # 设备 HTTP 服务只撑得住单连接，所有请求串行下发
         self._http_lock = asyncio.Lock()
 
@@ -223,12 +225,42 @@ class HiMediaPlayer:
         try:
             sock.settimeout(HTTP_TIMEOUT)
             sock.sendall(request)
-            chunks: list[bytes] = []
-            while True:
-                data = sock.recv(4096)
-                if not data:
+            buffer = b""
+            while b"\r\n\r\n" not in buffer:
+                chunk = sock.recv(4096)
+                if not chunk:
                     break
-                chunks.append(data)
+                buffer += chunk
+            header_bytes, _, body_bytes = buffer.partition(b"\r\n\r\n")
+            header_text = header_bytes.decode("iso-8859-1", "ignore")
+            headers: dict[str, str] = {}
+            for line in header_text.split("\r\n")[1:]:
+                key, _, value = line.partition(":")
+                if key:
+                    headers[key.strip().lower()] = value.strip()
+
+            if headers.get("transfer-encoding", "").lower() == "chunked":
+                while b"\r\n0\r\n\r\n" not in body_bytes:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    body_bytes += chunk
+            elif "content-length" in headers:
+                # 设备不会主动断开连接（HTTP/1.1 keep-alive），
+                # 必须按 Content-Length 精确读取，不能等 EOF
+                remaining = int(headers["content-length"]) - len(body_bytes)
+                while remaining > 0:
+                    chunk = sock.recv(min(4096, remaining))
+                    if not chunk:
+                        break
+                    body_bytes += chunk
+                    remaining -= len(chunk)
+            else:
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    body_bytes += chunk
         except TimeoutError as err:
             raise OSError(
                 f"TCP 已连接但设备 {HTTP_TIMEOUT} 秒内无响应：{host}:{port}"
@@ -236,14 +268,13 @@ class HiMediaPlayer:
         finally:
             sock.close()
 
-        raw = b"".join(chunks).decode("utf-8", "ignore")
-        header, _, body_text = raw.partition("\r\n\r\n")
-        status_line = header.split("\r\n", 1)[0]
+        status_line = header_text.split("\r\n", 1)[0]
         try:
             status = int(status_line.split()[1])
         except (IndexError, ValueError) as err:
-            raise OSError(f"设备返回非法响应：{raw[:120]!r}") from err
-        if "transfer-encoding: chunked" in header.lower():
+            raise OSError(f"设备返回非法响应：{header_text[:120]!r}") from err
+        body_text = body_bytes.decode("utf-8", "ignore")
+        if headers.get("transfer-encoding", "").lower() == "chunked":
             body_text = _decode_chunked(body_text)
         return status, body_text
 
@@ -289,6 +320,7 @@ class HiMediaPlayer:
             self._ip_down_until = 0.0
             self._last_ip_error = None
             self._ip_warned = False
+            self._ip_failure_cycles = 0
             text = body.strip()
             if not text:
                 return ""
@@ -304,14 +336,23 @@ class HiMediaPlayer:
                 f"{type(err).__name__}: {err}" if err else "status 非 200"
             )
             host, port = self._host_port()
-            _LOGGER.warning(
-                "HiChannelTV HTTP 不可达（%s:%s）[%s]，"
-                "%s 秒内改走串口，之后自动重试 IP",
+            message = (
+                "HiChannelTV HTTP 不可达（%s:%s）[%s]（设备可能已关机），"
+                "%s 秒内改走串口，之后自动重试 IP"
+            )
+            log = (
+                _LOGGER.warning
+                if self._ip_failure_cycles == 0
+                else _LOGGER.info
+            )
+            log(
+                message,
                 host,
                 port,
                 detail,
                 HTTP_RETRY_INTERVAL,
             )
+        self._ip_failure_cycles += 1
 
     async def async_get_device_info(self) -> dict[str, Any] | None:
         """读取设备信息（型号、版本、MAC 等）."""
@@ -398,7 +439,7 @@ class HiMediaPlayer:
                 )
                 return True
             _LOGGER.warning(
-                "HiChannelTV 8899 端口不可达（%s）[%s]，尝试串口降级",
+                "HiChannelTV 8899 端口不可达（%s）[%s]（设备可能已关机），尝试串口降级",
                 self._host,
                 self._last_ip_error or "未知原因",
             )

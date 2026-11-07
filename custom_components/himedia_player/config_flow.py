@@ -43,16 +43,9 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """第一步：选择自动识别串口还是手动配置."""
-        if user_input is not None:
-            if user_input.get("auto_detect"):
-                return await self.async_step_auto_detect()
-            return await self.async_step_manual()
-
-        return self.async_show_form(
+        return self.async_show_menu(
             step_id="user",
-            data_schema=vol.Schema(
-                {vol.Required("auto_detect", default=True): bool}
-            ),
+            menu_options=["auto_detect", "manual"],
         )
 
     async def async_step_auto_detect(
@@ -65,13 +58,14 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         candidates = [
             port.device for port in ports if self._is_likely_serial_device(port)
         ]
-        _LOGGER.debug("待检测串口: %s", candidates)
+        _LOGGER.info("开始扫描串口，候选: %s", candidates or "无")
 
         for port in candidates:
             info = await self.hass.async_add_executor_job(
                 self._sync_probe_port, port
             )
             if info is None:
+                _LOGGER.info("串口 %s 未响应 #getDeviceInfo#，跳过", port)
                 continue
             _LOGGER.info("在 %s 上发现海美迪播放器", port)
             self._detected_port = port
@@ -79,6 +73,7 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_host()
 
         # 没找到串口设备时退回手动配置，仍可只填 IP
+        _LOGGER.warning("未在串口上发现海美迪播放器，转为手动配置")
         return await self.async_step_manual()
 
     async def async_step_host(

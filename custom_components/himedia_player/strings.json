@@ -3,8 +3,9 @@
     "step": {
       "user": {
         "title": "选择配置方式",
-        "data": {
-          "auto_detect": "自动识别串口"
+        "menu_options": {
+          "auto_detect": "自动识别串口",
+          "manual": "手动配置"
         }
       },
       "host": {

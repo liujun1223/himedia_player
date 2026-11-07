@@ -3,8 +3,9 @@
     "step": {
       "user": {
         "title": "Choose setup method",
-        "data": {
-          "auto_detect": "Auto detect serial port"
+        "menu_options": {
+          "auto_detect": "Auto detect serial port",
+          "manual": "Manual configuration"
         }
       },
       "host": {

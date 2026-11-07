@@ -1,19 +1,18 @@
 """The HiMedia Player integration."""
 
 import asyncio
+import http.client
 import json
 import logging
 import time
 from typing import Any
 
-import aiohttp
 import serial
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 
 from .const import (
@@ -58,7 +57,6 @@ class HiMediaPlayer:
         self._host = host or None
         self._port = port or None
         self._baudrate = baudrate
-        self._session = async_get_clientsession(hass)
         self._serial_connection: serial.Serial | None = None
         self._available_ip = False
         self._available_serial = False
@@ -177,10 +175,40 @@ class HiMediaPlayer:
     # ------------------------------------------------------------------
     def _url(self, path: str) -> str:
         """拼接设备 HTTP 地址；host 已带端口时原样使用，否则补 8899."""
+        host, port = self._host_port()
+        return f"http://{host}:{port}{path}"
+
+    def _host_port(self) -> tuple[str, int]:
+        """解析配置中的 host 与端口."""
         host = self._host or ""
         if ":" in host:
-            return f"http://{host}{path}"
-        return f"http://{host}:{DEFAULT_HTTP_PORT}{path}"
+            host_part, _, port_part = host.rpartition(":")
+            return host_part, int(port_part)
+        return host, DEFAULT_HTTP_PORT
+
+    def _sync_http_request(
+        self, path: str, method: str, payload: dict[str, Any] | None
+    ) -> tuple[int, str]:
+        """用标准库发送 HTTP 请求，行为与 curl 一致.
+
+        设备内置的 HiChannelTV 服务对 aiohttp 的连接池与请求头兼容性差，
+        标准库每次新建连接、不协商 gzip、不读环境代理，最贴近 curl.
+        """
+        host, port = self._host_port()
+        body = json.dumps(payload) if payload is not None else None
+        headers = {
+            "Connection": "close",
+            "Accept-Encoding": "identity",
+        }
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        connection = http.client.HTTPConnection(host, port, timeout=HTTP_TIMEOUT)
+        try:
+            connection.request(method, path, body=body, headers=headers)
+            response = connection.getresponse()
+            return response.status, response.read().decode("utf-8", "ignore")
+        finally:
+            connection.close()
 
     async def async_http(
         self, path: str, method: str = "GET", payload: Any | None = None
@@ -194,47 +222,30 @@ class HiMediaPlayer:
             return None
         if time.monotonic() < self._ip_down_until:
             return None
-        # 模仿 curl 的请求行为，规避嵌入式 HTTP 服务器兼容性问题：
-        # - Connection: close   每请求一条新连接，用完即断，
-        #   防止设备单连接服务器被 keep-alive 池占死
-        # - Accept-Encoding: identity   不协商 gzip，
-        #   部分固件对 gzip 响应实现有缺陷
-        curl_like_headers = {
-            "Connection": "close",
-            "Accept-Encoding": "identity",
-        }
         # 设备 HTTP 服务只撑得住单连接，并发请求会互相挤占导致全部超时，
         # 因此所有请求串行下发
         async with self._http_lock:
             if time.monotonic() < self._ip_down_until:
                 return None
+            started = time.monotonic()
             try:
-                async with asyncio.timeout(HTTP_TIMEOUT):
-                    if method == "POST":
-                        request = self._session.post(
-                            self._url(path), json=payload, headers=curl_like_headers
-                        )
-                    else:
-                        request = self._session.get(
-                            self._url(path), headers=curl_like_headers
-                        )
-                    async with request as response:
-                        status = response.status
-                        body = await response.text()
-            except (TimeoutError, aiohttp.ClientError) as err:
+                status, body = await self._hass.async_add_executor_job(
+                    self._sync_http_request, path, method, payload
+                )
+            except (OSError, http.client.HTTPException, ValueError) as err:
                 self._last_ip_error = f"{type(err).__name__}: {err}"
                 self._mark_ip_down(err)
-                _LOGGER.debug(
-                    "HTTP %s 失败: %s: %s", path, type(err).__name__, err
-                )
+                _LOGGER.debug("%s 请求失败: %s: %s", self._url(path), type(err).__name__, err)
                 return None
+
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            _LOGGER.debug("%s -> HTTP %s，用时 %d ms", self._url(path), status, elapsed_ms)
 
             if status != 200:
                 self._last_ip_error = (
                     f"HTTP {status}（响应前 120 字符: {body[:120]!r}）"
                 )
                 self._mark_ip_down()
-                _LOGGER.debug("HTTP %s 返回状态码 %s", path, status)
                 return None
 
             self._available_ip = True
@@ -255,11 +266,12 @@ class HiMediaPlayer:
             detail = self._last_ip_error or (
                 f"{type(err).__name__}: {err}" if err else "status 非 200"
             )
+            host, port = self._host_port()
             _LOGGER.warning(
                 "HiChannelTV HTTP 不可达（%s:%s）[%s]，"
                 "%s 秒内改走串口，之后自动重试 IP",
-                self._host,
-                DEFAULT_HTTP_PORT,
+                host,
+                port,
                 detail,
                 HTTP_RETRY_INTERVAL,
             )

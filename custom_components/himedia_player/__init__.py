@@ -1,9 +1,9 @@
 """The HiMedia Player integration."""
 
 import asyncio
-import http.client
 import json
 import logging
+import socket
 import time
 from typing import Any
 
@@ -24,6 +24,7 @@ from .const import (
     DOMAIN,
     HTTP_AUDIO_PLAYER_INFO,
     HTTP_BROADCAST_MUSIC,
+    HTTP_CONNECT_TIMEOUT,
     HTTP_DEVICE_INFO,
     HTTP_PLAY_POSTER,
     HTTP_PLAYER_INFO,
@@ -189,26 +190,62 @@ class HiMediaPlayer:
     def _sync_http_request(
         self, path: str, method: str, payload: dict[str, Any] | None
     ) -> tuple[int, str]:
-        """用标准库发送 HTTP 请求，行为与 curl 一致.
+        """用裸 socket 发送 HTTP 请求，行为与 curl 一致.
 
-        设备内置的 HiChannelTV 服务对 aiohttp 的连接池与请求头兼容性差，
-        标准库每次新建连接、不协商 gzip、不读环境代理，最贴近 curl.
+        分阶段设置超时，便于从错误信息区分「TCP 连不上」与
+        「已连接但设备不返回数据」两类问题.
         """
         host, port = self._host_port()
-        body = json.dumps(payload) if payload is not None else None
-        headers = {
-            "Connection": "close",
-            "Accept-Encoding": "identity",
-        }
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-        connection = http.client.HTTPConnection(host, port, timeout=HTTP_TIMEOUT)
+        body = json.dumps(payload).encode() if payload is not None else b""
+        lines = [
+            f"{method} {path} HTTP/1.1",
+            f"Host: {host}:{port}",
+            "Connection: close",
+            "Accept-Encoding: identity",
+            "User-Agent: HomeAssistant-HiMediaPlayer",
+        ]
+        if body:
+            lines.append("Content-Type: application/json")
+            lines.append(f"Content-Length: {len(body)}")
+        request = ("\r\n".join(lines) + "\r\n\r\n").encode() + body
+
         try:
-            connection.request(method, path, body=body, headers=headers)
-            response = connection.getresponse()
-            return response.status, response.read().decode("utf-8", "ignore")
+            sock = socket.create_connection(
+                (host, port), timeout=HTTP_CONNECT_TIMEOUT
+            )
+        except TimeoutError as err:
+            raise OSError(
+                f"TCP 连接超时：{host}:{port} 不可达（HA 与设备不在同一网络或被防火墙拦截）"
+            ) from err
+        except OSError as err:
+            raise OSError(f"TCP 连接失败：{host}:{port}（{err}）") from err
+
+        try:
+            sock.settimeout(HTTP_TIMEOUT)
+            sock.sendall(request)
+            chunks: list[bytes] = []
+            while True:
+                data = sock.recv(4096)
+                if not data:
+                    break
+                chunks.append(data)
+        except TimeoutError as err:
+            raise OSError(
+                f"TCP 已连接但设备 {HTTP_TIMEOUT} 秒内无响应：{host}:{port}"
+            ) from err
         finally:
-            connection.close()
+            sock.close()
+
+        raw = b"".join(chunks).decode("utf-8", "ignore")
+        header, _, body_text = raw.partition("\r\n\r\n")
+        status_line = header.split("\r\n", 1)[0]
+        try:
+            status = int(status_line.split()[1])
+        except (IndexError, ValueError) as err:
+            raise OSError(f"设备返回非法响应：{raw[:120]!r}") from err
+        if "transfer-encoding: chunked" in header.lower():
+            body_text = _decode_chunked(body_text)
+        return status, body_text
 
     async def async_http(
         self, path: str, method: str = "GET", payload: Any | None = None
@@ -232,7 +269,7 @@ class HiMediaPlayer:
                 status, body = await self._hass.async_add_executor_job(
                     self._sync_http_request, path, method, payload
                 )
-            except (OSError, http.client.HTTPException, ValueError) as err:
+            except (OSError, ValueError) as err:
                 self._last_ip_error = f"{type(err).__name__}: {err}"
                 self._mark_ip_down(err)
                 _LOGGER.debug("%s 请求失败: %s: %s", self._url(path), type(err).__name__, err)
@@ -396,6 +433,24 @@ class HiMediaPlayer:
     def close(self) -> None:
         """释放串口资源."""
         self._close_serial()
+
+
+def _decode_chunked(body: str) -> str:
+    """解码 HTTP 分块传输响应体."""
+    parts: list[str] = []
+    while body:
+        line, sep, rest = body.partition("\r\n")
+        if not sep:
+            break
+        try:
+            size = int(line.split(";", 1)[0].strip(), 16)
+        except ValueError:
+            break
+        if size == 0:
+            break
+        parts.append(rest[:size])
+        body = rest[size + 2 :]
+    return "".join(parts)
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:

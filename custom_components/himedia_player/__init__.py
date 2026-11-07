@@ -64,6 +64,10 @@ class HiMediaPlayer:
         self._available_serial = False
         # HTTP 故障退避：monotonic 时间戳，早于该时间的请求直接跳过
         self._ip_down_until = 0.0
+        # 最近一次 HTTP 失败的原因（给 setup 降级日志与警告用）
+        self._last_ip_error: str | None = None
+        # 当前故障周期是否已在警告级别提示过
+        self._ip_warned = False
 
         self.mac_address: str | None = None
         self.model: str | None = None
@@ -208,6 +212,7 @@ class HiMediaPlayer:
                     status = response.status
                     body = await response.text()
         except (TimeoutError, aiohttp.ClientError) as err:
+            self._last_ip_error = f"{type(err).__name__}: {err}"
             self._mark_ip_down(err)
             _LOGGER.debug(
                 "HTTP %s 失败: %s: %s", path, type(err).__name__, err
@@ -215,24 +220,29 @@ class HiMediaPlayer:
             return None
 
         if status != 200:
+            self._last_ip_error = f"HTTP {status}（响应前 120 字符: {body[:120]!r}）"
             self._mark_ip_down()
             _LOGGER.debug("HTTP %s 返回状态码 %s", path, status)
             return None
 
         self._available_ip = True
         self._ip_down_until = 0.0
+        self._last_ip_error = None
+        self._ip_warned = False
         text = body.strip()
         if not text:
             return ""
         return _parse_json_object(text) or text
 
     def _mark_ip_down(self, err: Exception | None = None) -> None:
-        """标记 IP 通道进入退避期；首次失败时在普通日志级别给出原因."""
-        was_available = self._available_ip
+        """标记 IP 通道进入退避期；每个故障周期在警告级别提示一次原因."""
         self._available_ip = False
         self._ip_down_until = time.monotonic() + HTTP_RETRY_INTERVAL
-        if was_available:
-            detail = f"{type(err).__name__}: {err}" if err else "status 非 200"
+        if not self._ip_warned:
+            self._ip_warned = True
+            detail = self._last_ip_error or (
+                f"{type(err).__name__}: {err}" if err else "status 非 200"
+            )
             _LOGGER.warning(
                 "HiChannelTV HTTP 不可达（%s:%s）[%s]，"
                 "%s 秒内改走串口，之后自动重试 IP",
@@ -327,7 +337,9 @@ class HiMediaPlayer:
                 )
                 return True
             _LOGGER.warning(
-                "HiChannelTV 8899 端口不可达（%s），尝试串口降级", self._host
+                "HiChannelTV 8899 端口不可达（%s）[%s]，尝试串口降级",
+                self._host,
+                self._last_ip_error or "未知原因",
             )
 
         if self._port is not None:

@@ -68,6 +68,8 @@ class HiMediaPlayer:
         self._last_ip_error: str | None = None
         # 当前故障周期是否已在警告级别提示过
         self._ip_warned = False
+        # 设备 HTTP 服务只撑得住单连接，所有请求串行下发
+        self._http_lock = asyncio.Lock()
 
         self.mac_address: str | None = None
         self.model: str | None = None
@@ -174,8 +176,11 @@ class HiMediaPlayer:
     # HTTP（HiChannelTV，默认 8899）
     # ------------------------------------------------------------------
     def _url(self, path: str) -> str:
-        """拼接设备 HTTP 地址."""
-        return f"http://{self._host}{path}"
+        """拼接设备 HTTP 地址；host 已带端口时原样使用，否则补 8899."""
+        host = self._host or ""
+        if ":" in host:
+            return f"http://{host}{path}"
+        return f"http://{host}:{DEFAULT_HTTP_PORT}{path}"
 
     async def async_http(
         self, path: str, method: str = "GET", payload: Any | None = None
@@ -198,41 +203,48 @@ class HiMediaPlayer:
             "Connection": "close",
             "Accept-Encoding": "identity",
         }
-        try:
-            async with asyncio.timeout(HTTP_TIMEOUT):
-                if method == "POST":
-                    request = self._session.post(
-                        self._url(path), json=payload, headers=curl_like_headers
-                    )
-                else:
-                    request = self._session.get(
-                        self._url(path), headers=curl_like_headers
-                    )
-                async with request as response:
-                    status = response.status
-                    body = await response.text()
-        except (TimeoutError, aiohttp.ClientError) as err:
-            self._last_ip_error = f"{type(err).__name__}: {err}"
-            self._mark_ip_down(err)
-            _LOGGER.debug(
-                "HTTP %s 失败: %s: %s", path, type(err).__name__, err
-            )
-            return None
+        # 设备 HTTP 服务只撑得住单连接，并发请求会互相挤占导致全部超时，
+        # 因此所有请求串行下发
+        async with self._http_lock:
+            if time.monotonic() < self._ip_down_until:
+                return None
+            try:
+                async with asyncio.timeout(HTTP_TIMEOUT):
+                    if method == "POST":
+                        request = self._session.post(
+                            self._url(path), json=payload, headers=curl_like_headers
+                        )
+                    else:
+                        request = self._session.get(
+                            self._url(path), headers=curl_like_headers
+                        )
+                    async with request as response:
+                        status = response.status
+                        body = await response.text()
+            except (TimeoutError, aiohttp.ClientError) as err:
+                self._last_ip_error = f"{type(err).__name__}: {err}"
+                self._mark_ip_down(err)
+                _LOGGER.debug(
+                    "HTTP %s 失败: %s: %s", path, type(err).__name__, err
+                )
+                return None
 
-        if status != 200:
-            self._last_ip_error = f"HTTP {status}（响应前 120 字符: {body[:120]!r}）"
-            self._mark_ip_down()
-            _LOGGER.debug("HTTP %s 返回状态码 %s", path, status)
-            return None
+            if status != 200:
+                self._last_ip_error = (
+                    f"HTTP {status}（响应前 120 字符: {body[:120]!r}）"
+                )
+                self._mark_ip_down()
+                _LOGGER.debug("HTTP %s 返回状态码 %s", path, status)
+                return None
 
-        self._available_ip = True
-        self._ip_down_until = 0.0
-        self._last_ip_error = None
-        self._ip_warned = False
-        text = body.strip()
-        if not text:
-            return ""
-        return _parse_json_object(text) or text
+            self._available_ip = True
+            self._ip_down_until = 0.0
+            self._last_ip_error = None
+            self._ip_warned = False
+            text = body.strip()
+            if not text:
+                return ""
+            return _parse_json_object(text) or text
 
     def _mark_ip_down(self, err: Exception | None = None) -> None:
         """标记 IP 通道进入退避期；每个故障周期在警告级别提示一次原因."""

@@ -26,6 +26,7 @@ from .const import (
     HTTP_BROADCAST_MUSIC,
     HTTP_CONNECT_TIMEOUT,
     HTTP_DEVICE_INFO,
+    HTTP_GET_POSTER_LIST,
     HTTP_PLAY_POSTER,
     HTTP_PLAYER_INFO,
     HTTP_RETRY_INTERVAL,
@@ -363,6 +364,16 @@ class HiMediaPlayer:
         """通过 /playPoster 播放海报/影片（支持 smb、nfs 路径）."""
         result = await self.async_http(HTTP_PLAY_POSTER, method="POST", payload=payload)
         return result is not None
+
+    async def async_get_poster_list(self) -> list[dict[str, Any]]:
+        """读取海报墙数据（/getPosterList）；失败或格式异常时返回空列表."""
+        data = await self.async_http(HTTP_GET_POSTER_LIST)
+        if not isinstance(data, dict):
+            return []
+        posters = data.get("poster")
+        if not isinstance(posters, list):
+            return []
+        return [item for item in posters if isinstance(item, dict)]
 
     async def async_broadcast_music(self, path: str) -> bool:
         """通过 /broadCastMusic 播放本地/网络音乐."""

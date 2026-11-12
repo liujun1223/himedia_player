@@ -10,6 +10,7 @@
 - 串口自动识别（发送 `#getDeviceInfo#` 校验设备）
 - IP 状态轮询：当前影片名、时长、播放进度、播放/暂停状态
 - 点播：`media_player.play_media` 通过 `/playPoster` 播放 SMB/NFS/HTTP 视频，或通过 `/broadCastMusic` 播放音乐
+- 海报墙：在媒体库（浏览媒体）里读取设备扫描的影片，带封面与片名，点击任意一部直接在电视上播放
 - 遥控命令选择器，方便在自动化中逐条调试协议
 
 ## 安装
@@ -85,6 +86,7 @@ data:
 | `GET /getAudioPlayerInfo` | 音乐播放信息 |
 | `GET /send?key=xx` | 发送遥控键值 |
 | `POST /playPoster` | 按 url 播放视频（支持 SMB/NFS） |
+| `GET /getPosterList` | 海报墙影片列表（片名、简介、封面、播放地址） |
 | `POST /broadCastMusic` | 播放音乐 |
 | `GET /playVideo` 等 | 视频/音乐控制、`/switchAudio`、`/switchSub`、`/poweroff` |
 

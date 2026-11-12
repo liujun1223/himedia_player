@@ -1,4 +1,4 @@
-"""Media Player platform for HiMedia Player."""
+﻿"""Media Player platform for HiMedia Player."""
 
 from datetime import timedelta
 import logging
@@ -222,7 +222,7 @@ class HiMediaMediaPlayer(MediaPlayerEntity):
             media_content_type=MediaType.VIDEO,
             title=self.name or "海美迪",
             can_play=False,
-            can_browse=True,
+            can_expand=True,
             children=[
                 BrowseMedia(
                     media_class=MediaClass.DIRECTORY,
@@ -230,7 +230,7 @@ class HiMediaMediaPlayer(MediaPlayerEntity):
                     media_content_type=MediaType.VIDEO,
                     title="海报墙",
                     can_play=False,
-                    can_browse=True,
+                    can_expand=True,
                 )
             ],
         )
@@ -255,7 +255,7 @@ class HiMediaMediaPlayer(MediaPlayerEntity):
                     media_content_type=MediaType.VIDEO,
                     title=title,
                     can_play=True,
-                    can_browse=False,
+                    can_expand=False,
                     thumbnail=thumbnail,
                 )
             )
@@ -266,7 +266,7 @@ class HiMediaMediaPlayer(MediaPlayerEntity):
             media_content_type=MediaType.VIDEO,
             title=f"海报墙（{len(children)}）",
             can_play=False,
-            can_browse=True,
+            can_expand=True,
             children=children,
         )
 

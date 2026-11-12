@@ -1,4 +1,4 @@
-﻿"""Media Player platform for HiMedia Player."""
+"""Media Player platform for HiMedia Player."""
 
 from datetime import timedelta
 import logging

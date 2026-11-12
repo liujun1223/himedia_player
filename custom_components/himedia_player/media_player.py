@@ -241,10 +241,18 @@ class HiMediaMediaPlayer(MediaPlayerEntity):
         self._posters = {}
         children: list[BrowseMedia] = []
         for index, poster in enumerate(posters):
-            key = str(poster.get("path") or f"item_{index}")
+            # path 可能只是所在目录（同一目录下多部影片完全相同），
+            # 用它做键会让所有海报指向同一条数据，因此优先用 url，并在重复时补序号
+            key = str(poster.get("url") or poster.get("path") or f"item_{index}")
             media_id = f"{POSTER_PREFIX}{key}"
+            if media_id in self._posters:
+                media_id = f"{media_id}#{index}"
             self._posters[media_id] = poster
-            title = str(poster.get("title") or poster.get("name") or key).strip()
+            title = str(
+                poster.get("title")
+                or poster.get("name")
+                or key.rsplit("/", 1)[-1]
+            ).strip()
             thumbnail = poster.get("extra1") or poster.get("extra2")
             if not isinstance(thumbnail, str) or not thumbnail.startswith("http"):
                 thumbnail = None

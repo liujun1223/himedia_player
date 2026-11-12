@@ -28,6 +28,36 @@ SCAN_INTERVAL = timedelta(seconds=10)
 POSTER_ROOT = "posters"
 POSTER_PREFIX = "poster|"
 
+_VIDEO_EXTENSIONS = (
+    ".3gp",
+    ".avi",
+    ".flv",
+    ".iso",
+    ".m2ts",
+    ".m4v",
+    ".mkv",
+    ".mov",
+    ".mp4",
+    ".mpeg",
+    ".mpg",
+    ".rmvb",
+    ".ts",
+    ".vob",
+    ".webm",
+    ".wmv",
+)
+
+
+def _is_video(poster: dict[str, Any]) -> bool:
+    """判断海报条目是否为视频：协议 type 为 video/*，否则再看文件扩展名."""
+    media_type = poster.get("type")
+    if isinstance(media_type, str) and media_type.lower().startswith("video"):
+        return True
+    url = poster.get("url")
+    if isinstance(url, str):
+        return url.lower().rsplit("?", 1)[0].endswith(_VIDEO_EXTENSIONS)
+    return False
+
 _SHARE_TYPE = {
     "smb": "SMB",
     "nfs": "NFS",
@@ -237,7 +267,7 @@ class HiMediaMediaPlayer(MediaPlayerEntity):
 
     async def _async_browse_posters(self) -> BrowseMedia:
         """读取 getPosterList 并转换成可播放的媒体条目."""
-        posters = await self._device.async_get_poster_list()
+        posters = [item for item in await self._device.async_get_poster_list() if _is_video(item)]
         self._posters = {}
         children: list[BrowseMedia] = []
         for index, poster in enumerate(posters):

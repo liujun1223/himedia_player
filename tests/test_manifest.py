@@ -16,5 +16,6 @@ def test_manifest_matches_folder() -> None:
     assert manifest["domain"] == COMPONENT_DIR.name
     assert manifest["version"]
     assert manifest["config_flow"] is True
-    # pyserial 是第三方依赖，必须声明，以便 HACS/HA 校验
-    assert "pyserial" in "".join(manifest.get("requirements", []))
+    # pyserial 是 HA core 自带的依赖，自定义集成本身不应重复声明
+    # （Hassfest 会拒绝这类声明）
+    assert "pyserial" not in "".join(manifest.get("requirements", []))

@@ -1,5 +1,6 @@
 """Config flow for the HiMedia Player integration."""
 
+import asyncio
 import json
 import logging
 import time
@@ -51,28 +52,28 @@ class HiMediaPlayerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_auto_detect(
         self, user_input: Any = None
     ) -> ConfigFlowResult:
-        """扫描串口并发送 #getDeviceInfo# 验证海美迪播放器."""
+        """扫描串口并发送 #getDeviceInfo# 验证海美迪播放器（并行探测，总耗时 ~1 秒）."""
         ports = await self.hass.async_add_executor_job(
             serial.tools.list_ports.comports
         )
         candidates = [
             port.device for port in ports if self._is_likely_serial_device(port)
         ]
-        _LOGGER.info("开始扫描串口，候选: %s", candidates or "无")
+        _LOGGER.info("开始并行扫描串口，候选: %s", candidates or "无")
 
-        for port in candidates:
-            info = await self.hass.async_add_executor_job(
-                self._sync_probe_port, port
-            )
-            if info is None:
-                _LOGGER.info("串口 %s 未响应 #getDeviceInfo#，跳过", port)
-                continue
-            _LOGGER.info("在 %s 上发现海美迪播放器", port)
-            self._detected_port = port
-            self._detected_info = info
-            return await self.async_step_host()
+        if candidates:
+            probe_tasks = [
+                self.hass.async_add_executor_job(self._sync_probe_port, port)
+                for port in candidates
+            ]
+            results = await asyncio.gather(*probe_tasks)
+            for port, info in zip(candidates, results, strict=False):
+                if info is not None:
+                    _LOGGER.info("在 %s 上发现海美迪播放器", port)
+                    self._detected_port = port
+                    self._detected_info = info
+                    return await self.async_step_host()
 
-        # 没找到串口设备时退回手动配置，仍可只填 IP
         _LOGGER.warning("未在串口上发现海美迪播放器，转为手动配置")
         return await self.async_step_manual()
 

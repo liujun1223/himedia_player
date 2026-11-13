@@ -16,5 +16,5 @@ def test_manifest_matches_folder() -> None:
     assert manifest["domain"] == COMPONENT_DIR.name
     assert manifest["version"]
     assert manifest["config_flow"] is True
-    # pyserial 是 Home Assistant 自带依赖，自定义集成不得重复声明
-    assert "pyserial" not in "".join(manifest.get("requirements", []))
+    # pyserial 是第三方依赖，必须声明，以便 HACS/HA 校验
+    assert "pyserial" in "".join(manifest.get("requirements", []))

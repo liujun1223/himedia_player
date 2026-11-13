@@ -9,5 +9,6 @@
   "integration_type": "device",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/liujun1223/himedia_player/issues",
-  "version": "1.0.15"
+  "requirements": ["pyserial"],
+  "version": "1.0.16"
 }

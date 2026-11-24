@@ -1,23 +1,9 @@
 {
   "config": {
     "step": {
-      "user": {
-        "title": "Choose setup method",
-        "menu_options": {
-          "auto_detect": "Auto detect serial port",
-          "manual": "Manual configuration"
-        }
-      },
-      "host": {
-        "title": "Player IP address (optional)",
-        "description": "Detected player **{name}**. Enter the IP address to enable status polling and media playback over port 8899, or leave empty to use RS-232 only.",
-        "data": {
-          "host": "IP address"
-        }
-      },
       "manual": {
         "title": "Manual configuration",
-        "description": "Fill in at least one of serial port or IP address. When both are set, IP is tried first and serial is used as fallback.",
+        "description": "Pick a serial port and/or enter an IP address. At least one is required. When both are set, IP is tried first and serial is used as fallback.",
         "data": {
           "baudrate": "Baud rate",
           "host": "IP address (optional)",
@@ -29,6 +15,7 @@
       "cannot_connect_http": "Cannot reach the HiChannelTV HTTP service on port 8899. Check the IP address and network.",
       "cannot_connect_serial": "No response on the serial port. Check the cable and baud rate.",
       "no_connection": "Please provide a serial port or an IP address.",
+      "port_in_use": "This serial port is already used by another HiMedia Player entry. Pick a different port.",
       "unknown": "Unexpected error"
     },
     "abort": {

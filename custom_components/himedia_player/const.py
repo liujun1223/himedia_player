@@ -19,10 +19,6 @@ SERIAL_TIMEOUT = 1
 # HTTP 失败后的退避时间（秒），期间跳过 IP 通道直接走串口
 HTTP_RETRY_INTERVAL = 60
 
-# 支持 USB 转串口的芯片 VID
-# FTDI: 0x0403, Silicon Labs: 0x10C4, Prolific: 0x067B, CH340: 0x1A86
-SUPPORTED_USB_VIDS = [0x0403, 0x10C4, 0x067B, 0x1A86]
-
 # ---------------------------------------------------------------------------
 # HiChannelTV HTTP 接口（端口 8899）
 # ---------------------------------------------------------------------------
@@ -112,6 +108,7 @@ NAMED_COMMANDS: dict[str, tuple[str | None, str | None]] = {
     "switch_subtitle": (None, "/switchSub"),
     # 电源与系统
     "power_off": ("#26#", "/poweroff"),
+    # 重启机器：协议文档「2. 本地视频播放命令表」原文即为 RST（不加 # 包裹）
     "restart": ("RST", None),
     # 长按（232 使用专用键值，IP 使用 longdown/longup）
     "hold_left": ("#1035#", "/send?longdown=21"),

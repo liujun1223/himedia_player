@@ -7,7 +7,7 @@
 - 双通道控制：可只配串口、只配 IP，或两者同时配置（优先走 IP，失败自动降级到串口）
 - 电源开关、播放/暂停/停止、上一部/下一部、音量加减与静音
 - 完整遥控键值：方向键、OK、主页、返回、菜单、数字键、字母键、彩色键、字幕/音轨/循环、长按左右键
-- 串口自动识别（发送 `#getDeviceInfo#` 校验设备）
+- 手动选择串口并发送 `#getDeviceInfo#` 校验设备（不会自动扫描未选中的串口）
 - IP 状态轮询：当前影片名、时长、播放进度、播放/暂停状态
 - 点播：`media_player.play_media` 通过 `/playPoster` 播放 SMB/NFS/HTTP 视频，或通过 `/broadCastMusic` 播放音乐
 - 海报墙：在媒体库（浏览媒体）里读取设备扫描的影片，只列出视频文件，带封面与片名，点击任意一部直接在电视上播放
@@ -27,12 +27,9 @@
 
 ## 配置
 
-「设置 → 设备与服务 → 添加集成 → HiMedia Player」，有两种方式：
+「设置 → 设备与服务 → 添加集成 → HiMedia Player」，在同一个表单里自行选择串口和/或填写 IP，波特率默认 115200。
 
-| 方式 | 说明 |
-| --- | --- |
-| 自动识别串口 | 扫描本机串口并发送 `#getDeviceInfo#` 校验，识别成功后可选填 IP |
-| 手动配置 | 自行选择串口（可留空）与/或填写 IP，波特率默认 115200 |
+集成不会自动扫描串口：FTDI / CH340 等 USB 转串口芯片同样被 Zigbee、Z-Wave 等集成使用，未经用户选择就打开端口发送探测字节会干扰其它无线电通信。只有你在表单中明确选中的端口才会被打开并发送 `#getDeviceInfo#` 校验；已被其它 HiMedia Player 条目占用的端口会直接报错。
 
 配置项：
 
@@ -51,7 +48,7 @@
 | `media_player.<设备名>` | 播放器本体：开关机、播放控制、音量、点播 |
 | `select.<设备名>_remote` | 遥控命令选择器，选中后立即下发 |
 
-支持的遥控命令名与协议键值一一对应，例如 `up`、`down`、`left`、`right`、`ok`、`home`、`back`、`menu`、`volume_up`、`mute`、`digit_1`、`letter_a`、`red`、`subtitle`、`audio_track`、`loop`、`play_video`、`pause_video`、`stop_video`、`previous_video`、`next_video`、`play_audio`、`switch_audio`、`switch_subtitle`、`power_off`、`hold_left`、`hold_right`、`hold_stop` 等。
+支持的遥控命令名与协议键值一一对应，例如 `up`、`down`、`left`、`right`、`ok`、`home`、`back`、`menu`、`volume_up`、`mute`、`digit_1`、`letter_a`、`red`、`subtitle`、`audio_track`、`loop`、`play_video`、`pause_video`、`stop_video`、`previous_video`、`next_video`、`play_audio`、`switch_audio`、`switch_subtitle`、`power_off`、`restart`、`hold_left`、`hold_right`、`hold_stop` 等。
 
 ## 点播示例
 
@@ -77,6 +74,8 @@ data:
 
 ## 协议说明
 
+以下接口与键值均依据厂商文档《海美迪智能控制协议 8K-2.1》实现，文档副本见 [docs/himedia-control-protocol-8k-2.1.pdf](docs/himedia-control-protocol-8k-2.1.pdf)。
+
 ### IP（HiChannelTV，端口 8899）
 
 | 接口 | 说明 |
@@ -94,6 +93,7 @@ data:
 
 - 命令格式：`#<Android 标准键值>#`，成功返回 `OK`，失败返回 `ER`
 - 复合命令：`#playVideo#`、`#pauseVideo#`、`#stopVideo#`、`#preVideo#`、`#nextVideo#`、`#playAudio#`、`#preAudio#`、`#nextAudio#` 等
+- 重启机器：`RST`（唯一不带 `#` 包裹的命令，按文档原文实现）。出处：《海美迪智能控制协议 8K-2.1》「2. 本地视频播放命令表」第 19 页，原文为 `RST 重启机器`，见 [协议文档](docs/himedia-control-protocol-8k-2.1.pdf)
 - 设备主动上报：`#videoPlay#`、`#videoPause#`、`#videoStop#`、`#audioPlay#`、`#poweron#`、`#poweroff#` 等
 
 ## 已知限制
